@@ -93,7 +93,12 @@ The ApiService project  should have these packages:
 <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.7" />
 ```
 
-Do a `dotnet build` to build the solution.
+Run a `dotnet build` to verify to solution builds correctly.
+
+```shell,run,copy
+dotnet build
+```
+
 
 ---
 
