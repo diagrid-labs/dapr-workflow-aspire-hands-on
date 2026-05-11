@@ -1,6 +1,6 @@
 # Manual Instructions: USS Enterprise Diagnostics (Aspire + Dapr Workflow)
 
-Step-by-step instructions for building an Aspire workflow application that analyzes 3 USS Enterprise subsystems in parallel, prioritizes the results, and notifies the bridge if the priority is urgent. All activities use randomly generated mock data.
+Step-by-step instructions for building an Aspire workflow application that diagnoses 3 USS Enterprise subsystems in parallel, prioritizes the results, and notifies the bridge if the priority is urgent. All activities use randomly generated mock data.
 
 The project name throughout is **`EnterpriseDiagnostics`** — change it consistently if you'd like a different name.
 
@@ -76,6 +76,7 @@ dotnet add EnterpriseDiagnostics.ApiService/EnterpriseDiagnostics.ApiService.csp
 dotnet add EnterpriseDiagnostics.ApiService/EnterpriseDiagnostics.ApiService.csproj package Dapr.Workflow.Versioning --version 1.17.9
 dotnet add EnterpriseDiagnostics.AppHost/EnterpriseDiagnostics.AppHost.csproj package CommunityToolkit.Aspire.Hosting.Dapr --version 13.0.0
 dotnet add EnterpriseDiagnostics.AppHost/EnterpriseDiagnostics.AppHost.csproj package Aspire.Hosting.Valkey --version 13.3.0
+dotnet add EnterpriseDiagnostics.AppHost/EnterpriseDiagnostics.AppHost.csproj package Diagrid.Aspire.Hosting.Dashboard
 ```
 
 The AppHost project  should have these packages:
@@ -83,6 +84,7 @@ The AppHost project  should have these packages:
 ```text,nocopy
 <PackageReference Include="Aspire.Hosting.Valkey" Version="13.3.0" />
 <PackageReference Include="CommunityToolkit.Aspire.Hosting.Dapr" Version="13.0.0" />
+<PackageReference Include="Diagrid.Aspire.Hosting.Dashboard" Version="0.0.1" />
 ```
 
 The ApiService project  should have these packages:
@@ -112,14 +114,14 @@ mkdir EnterpriseDiagnostics.ApiService/Workflows
 mkdir EnterpriseDiagnostics.ApiService/Activities
 ```
 
-### 2.1 Models — `Models/EnterpriseModels.cs`
+### 2.1 Models — `Models/Models.cs`
 
-Create the models first, they all record type models and are all placed in the same file. There are input and output records for the workflow, the subsystem analyses the prioritization, and the bridge notification activities.
+Create the models first, they all record type models and are all placed in the same file. There are input and output records for the workflow, the subsystem diagnostics the prioritization, and the bridge notification activities.
 
 First create the file:
 
 ```shell,run,copy
-touch EnterpriseDiagnostics.Models/Models.cs
+touch EnterpriseDiagnostics.ApiService/Models/Models.cs
 ```
 
 Then copy the code:
@@ -127,23 +129,23 @@ Then copy the code:
 ```csharp
 namespace EnterpriseDiagnostics.Models;
 
-public record EnterpriseAnalysisInput(string Id, string MissionName);
+public record EnterpriseDiagnosticsInput(string Id, string StarDate);
 
-public record EnterpriseAnalysisOutput(
-    string MissionName,
+public record EnterpriseDiagnosticsOutput(
+    string StarDate,
     string Priority,
     string Summary,
     bool BridgeNotified);
 
-public record SubsystemAnalysisInput(string SubsystemName);
+public record SubsystemDiagnosticsInput(string SubsystemName);
 
-public record SubsystemAnalysisOutput(
+public record SubsystemDiagnosticsOutput(
     string SubsystemName,
     string Status,
     int AnomalyScore,
     double PowerLevel);
 
-public record PrioritizationInput(SubsystemAnalysisOutput[] Analyses);
+public record PrioritizationInput(SubsystemDiagnosticsOutput[] Diagnostics);
 
 public record PrioritizationOutput(string Priority, string Summary);
 
@@ -152,14 +154,14 @@ public record BridgeNotificationInput(string Priority, string Summary);
 public record BridgeNotificationOutput(bool Acknowledged, string AcknowledgedBy);
 ```
 
-### 2.2 Workflow — `Workflows/EnterpriseAnalysisWorkflow.cs`
+### 2.2 Workflow — `Workflows/EnterpriseDiagnosticsWorkflow.cs`
 
 Now create the workflow, it will fan-out/fan-in over 3 subsystems to run diagnostics, then prioritize, then conditionally notify the bridge.
 
 First create the file:
 
 ```shell,run,copy
-touch EnterpriseDiagnostics.Workflows/EnterpriseAnalysisWorkflow.cs
+touch EnterpriseDiagnostics.ApiService/Workflows/EnterpriseDiagnosticsWorkflow.cs
 ```
 
 Then copy the code:
@@ -172,8 +174,8 @@ using EnterpriseDiagnostics.Models;
 
 namespace EnterpriseDiagnostics.Workflows;
 
-internal sealed partial class EnterpriseAnalysisWorkflow
-    : Workflow<EnterpriseAnalysisInput, EnterpriseAnalysisOutput>
+internal sealed partial class EnterpriseDiagnosticsWorkflow
+    : Workflow<EnterpriseDiagnosticsInput, EnterpriseDiagnosticsOutput>
 {
     private static readonly string[] Subsystems =
     [
@@ -182,23 +184,23 @@ internal sealed partial class EnterpriseAnalysisWorkflow
         "Shields",
     ];
 
-    public override async Task<EnterpriseAnalysisOutput> RunAsync(
+    public override async Task<EnterpriseDiagnosticsOutput> RunAsync(
         WorkflowContext context,
-        EnterpriseAnalysisInput input)
+        EnterpriseDiagnosticsInput input)
     {
-        var logger = context.CreateReplaySafeLogger<EnterpriseAnalysisWorkflow>();
-        LogStart(logger, context.InstanceId, input.MissionName);
+        var logger = context.CreateReplaySafeLogger<EnterpriseDiagnosticsWorkflow>();
+        LogStart(logger, context.InstanceId, input.StarDate);
 
-        var analysisTasks = Subsystems.Select(name =>
-            context.CallActivityAsync<SubsystemAnalysisOutput>(
-                nameof(AnalyzeSubsystemActivity),
-                new SubsystemAnalysisInput(name)));
+        var diagnosticsTasks = Subsystems.Select(name =>
+            context.CallActivityAsync<SubsystemDiagnosticsOutput>(
+                nameof(DiagnoseSubsystemActivity),
+                new SubsystemDiagnosticsInput(name)));
 
-        var analyses = await Task.WhenAll(analysisTasks);
+        var diagnostics = await Task.WhenAll(diagnosticsTasks);
 
         var prioritization = await context.CallActivityAsync<PrioritizationOutput>(
-            nameof(PrioritizeAnalysesActivity),
-            new PrioritizationInput(analyses));
+            nameof(PrioritizeDiagnosticsActivity),
+            new PrioritizationInput(diagnostics));
 
         bool bridgeNotified = false;
         if (string.Equals(prioritization.Priority, "Urgent", StringComparison.OrdinalIgnoreCase))
@@ -210,29 +212,29 @@ internal sealed partial class EnterpriseAnalysisWorkflow
             bridgeNotified = notification.Acknowledged;
         }
 
-        return new EnterpriseAnalysisOutput(
-            input.MissionName,
+        return new EnterpriseDiagnosticsOutput(
+            input.StarDate,
             prioritization.Priority,
             prioritization.Summary,
             bridgeNotified);
     }
 
-    [LoggerMessage(LogLevel.Information, "Starting analysis workflow {Id} for mission {Mission}")]
-    static partial void LogStart(ILogger logger, string Id, string Mission);
+    [LoggerMessage(LogLevel.Information, "Starting diagnostics workflow {Id} at stardate {StarDate}")]
+    static partial void LogStart(ILogger logger, string Id, string StarDate);
 
     [LoggerMessage(LogLevel.Warning, "Urgent priority detected on workflow {Id}; notifying bridge")]
     static partial void LogUrgent(ILogger logger, string Id);
 }
 ```
 
-### 2.3 Activity — `Activities/AnalyzeSubsystemActivity.cs`
+### 2.3 Activity — `Activities/DiagnoseSubsystemActivity.cs`
 
-Now create the AnalyzeSubsystemActivity, it returns randomly-generated mock telemetry for a single subsystem.
+Now create the DiagnoseSubsystemActivity, it returns randomly-generated mock telemetry for a single subsystem.
 
 First create the file:
 
 ```shell,run,copy
-touch EnterpriseDiagnostics.Activities/AnalyzeSubsystemActivity.cs
+touch EnterpriseDiagnostics.ApiService/Activities/DiagnoseSubsystemActivity.cs
 ```
 
 Then copy the code:
@@ -244,48 +246,48 @@ using EnterpriseDiagnostics.Models;
 
 namespace EnterpriseDiagnostics.Activities;
 
-internal sealed partial class AnalyzeSubsystemActivity(ILogger<AnalyzeSubsystemActivity> logger)
-    : WorkflowActivity<SubsystemAnalysisInput, SubsystemAnalysisOutput>
+internal sealed partial class DiagnoseSubsystemActivity(ILogger<DiagnoseSubsystemActivity> logger)
+    : WorkflowActivity<SubsystemDiagnosticsInput, SubsystemDiagnosticsOutput>
 {
     private static readonly string[] Statuses = ["Nominal", "Degraded", "Critical"];
 
-    public override Task<SubsystemAnalysisOutput> RunAsync(
+    public override Task<SubsystemDiagnosticsOutput> RunAsync(
         WorkflowActivityContext context,
-        SubsystemAnalysisInput input)
+        SubsystemDiagnosticsInput input)
     {
-        LogAnalyzing(logger, input.SubsystemName);
+        LogDiagnosing(logger, input.SubsystemName);
 
         var random = Random.Shared;
         var status = Statuses[random.Next(Statuses.Length)];
         var anomalyScore = random.Next(0, 101);
         var powerLevel = Math.Round(random.NextDouble() * 100.0, 2);
 
-        var result = new SubsystemAnalysisOutput(
+        var result = new SubsystemDiagnosticsOutput(
             input.SubsystemName,
             status,
             anomalyScore,
             powerLevel);
 
-        LogAnalyzed(logger, input.SubsystemName, status, anomalyScore);
+        LogDiagnosed(logger, input.SubsystemName, status, anomalyScore);
         return Task.FromResult(result);
     }
 
-    [LoggerMessage(LogLevel.Information, "Analyzing subsystem {Subsystem}")]
-    static partial void LogAnalyzing(ILogger logger, string Subsystem);
+    [LoggerMessage(LogLevel.Information, "Diagnosing subsystem {Subsystem}")]
+    static partial void LogDiagnosing(ILogger logger, string Subsystem);
 
-    [LoggerMessage(LogLevel.Information, "Analyzed {Subsystem}: status={Status}, anomaly={Anomaly}")]
-    static partial void LogAnalyzed(ILogger logger, string Subsystem, string Status, int Anomaly);
+    [LoggerMessage(LogLevel.Information, "Diagnosed {Subsystem}: status={Status}, anomaly={Anomaly}")]
+    static partial void LogDiagnosed(ILogger logger, string Subsystem, string Status, int Anomaly);
 }
 ```
 
-### 2.4 Activity — `Activities/PrioritizeAnalysesActivity.cs`
+### 2.4 Activity — `Activities/PrioritizeDiagnosticsActivity.cs`
 
-Create the PrioritizeAnalysesActivity which aggregates the three subsystem reports into a single prioritized report.
+Create the PrioritizeDiagnosticsActivity which aggregates the three subsystem reports into a single prioritized report.
 
 First create the file:
 
 ```shell,run,copy
-touch EnterpriseDiagnostics.Activities/PrioritizeAnalysesActivity.cs
+touch EnterpriseDiagnostics.ApiService/Activities/PrioritizeDiagnosticsActivity.cs
 ```
 
 Then copy the code:
@@ -297,15 +299,15 @@ using EnterpriseDiagnostics.Models;
 
 namespace EnterpriseDiagnostics.Activities;
 
-internal sealed partial class PrioritizeAnalysesActivity(ILogger<PrioritizeAnalysesActivity> logger)
+internal sealed partial class PrioritizeDiagnosticsActivity(ILogger<PrioritizeDiagnosticsActivity> logger)
     : WorkflowActivity<PrioritizationInput, PrioritizationOutput>
 {
     public override Task<PrioritizationOutput> RunAsync(
         WorkflowActivityContext context,
         PrioritizationInput input)
     {
-        var maxAnomaly = input.Analyses.Max(a => a.AnomalyScore);
-        var anyCritical = input.Analyses.Any(a => a.Status == "Critical");
+        var maxAnomaly = input.Diagnostics.Max(a => a.AnomalyScore);
+        var anyCritical = input.Diagnostics.Any(a => a.Status == "Critical");
 
         string priority = (anyCritical, maxAnomaly) switch
         {
@@ -316,14 +318,14 @@ internal sealed partial class PrioritizeAnalysesActivity(ILogger<PrioritizeAnaly
         };
 
         var summary = string.Join("; ",
-            input.Analyses.Select(a =>
+            input.Diagnostics.Select(a =>
                 $"{a.SubsystemName}={a.Status} (anomaly {a.AnomalyScore}, power {a.PowerLevel}%)"));
 
         LogPriority(logger, priority, maxAnomaly);
         return Task.FromResult(new PrioritizationOutput(priority, summary));
     }
 
-    [LoggerMessage(LogLevel.Information, "Prioritized analyses: {Priority} (max anomaly={Max})")]
+    [LoggerMessage(LogLevel.Information, "Prioritized diagnostics: {Priority} (max anomaly={Max})")]
     static partial void LogPriority(ILogger logger, string Priority, int Max);
 }
 ```
@@ -335,7 +337,7 @@ Create the final activity, NotifyBridgeActivity, that mock-notifies the bridge w
 First create the file:
 
 ```shell,run,copy
-touch EnterpriseDiagnostics.Activities/NotifyBridgeActivity.cs
+touch EnterpriseDiagnostics.ApiService/Activities/NotifyBridgeActivity.cs
 ```
 
 Then copy the code:
@@ -399,8 +401,8 @@ builder.AddServiceDefaults();
 
 builder.Services.AddDaprWorkflow(options =>
 {
-    options.RegisterActivity<AnalyzeSubsystemActivity>();
-    options.RegisterActivity<PrioritizeAnalysesActivity>();
+    options.RegisterActivity<DiagnoseSubsystemActivity>();
+    options.RegisterActivity<PrioritizeDiagnosticsActivity>();
     options.RegisterActivity<NotifyBridgeActivity>();
 });
 builder.Services.AddDaprWorkflowVersioning();
@@ -409,10 +411,10 @@ var app = builder.Build();
 
 app.MapPost("/start", async (
     [FromServices] DaprWorkflowClient workflowClient,
-    [FromBody] EnterpriseAnalysisInput workflowInput) =>
+    [FromBody] EnterpriseDiagnosticsInput workflowInput) =>
 {
     var instanceId = await workflowClient.ScheduleNewWorkflowAsync(
-        name: nameof(EnterpriseAnalysisWorkflow),
+        name: nameof(EnterpriseDiagnosticsWorkflow),
         instanceId: workflowInput.Id,
         input: workflowInput);
 
@@ -429,7 +431,7 @@ app.MapGet("/status/{instanceId}", async (
         return Results.NotFound($"Workflow instance '{instanceId}' not found.");
     }
 
-    var output = state.ReadOutputAs<EnterpriseAnalysisOutput>();
+    var output = state.ReadOutputAs<EnterpriseDiagnosticsOutput>();
     return Results.Ok(new { state, output });
 });
 
@@ -478,9 +480,17 @@ Fix any errors before continuing.
 
 # Module 3 — AppHost Definition
 
-All files in this module live under `EnterpriseDiagnostics.AppHost/`. Create a `Resources/` folder.
+All files in this module live under `EnterpriseDiagnostics.AppHost/`. 
 
-### 3.1 `Resources/statestore.yaml`
+The Diagrid Dev Dashboard requires a connection to the statestore that is based on a Dapr component file. The default location for the Diagrid Dev Dashboard Aspire integration is  in the AppHost project.
+
+Create a `Resources/dapr` folder.
+
+```shell,run,copy
+mkdir EnterpriseDiagnostics.AppHost/Resources/dapr/diagrid-dashboard-components
+```
+
+### 3.1 `Resources/dapr/workflow-state.yaml`
 
 Used by the ApiService Dapr sidecar (runs on the host, so `localhost`).
 
@@ -488,7 +498,7 @@ Used by the ApiService Dapr sidecar (runs on the host, so `localhost`).
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: workflow-store
+  name: workflow-state
 spec:
   type: state.redis
   version: v1
@@ -501,7 +511,7 @@ spec:
       value: true
 ```
 
-### 3.2 `Resources/statestore-dashboard.yaml`
+### 3.2 `Resources/dapr/diagrid-dashboard-components/diagrid-dashboard-state.yaml`
 
 Used by the Diagrid Dashboard container (runs in Docker, so `host.docker.internal`).
 
@@ -509,7 +519,7 @@ Used by the Diagrid Dashboard container (runs in Docker, so `host.docker.interna
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: workflow-store
+  name: diagrid-dashboard-store
 scopes:
   - diagrid-dashboard
 spec:
@@ -529,7 +539,7 @@ spec:
 Add a `Content` item group so the YAML files are copied to the output directory. The full file should look like:
 
 ```xml
-<Project Sdk="Aspire.AppHost.Sdk/13.2.2">
+<Project Sdk="Aspire.AppHost.Sdk/13.3.0">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -541,11 +551,13 @@ Add a `Content` item group so the YAML files are copied to the output directory.
 
   <ItemGroup>
     <ProjectReference Include="..\EnterpriseDiagnostics.ApiService\EnterpriseDiagnostics.ApiService.csproj" />
+    <ProjectReference Include="..\EnterpriseDiagnostics.Web\EnterpriseDiagnostics.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.2.2" />
+    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.3.0" />
     <PackageReference Include="CommunityToolkit.Aspire.Hosting.Dapr" Version="13.0.0" />
+    <PackageReference Include="Diagrid.Aspire.Hosting.Dashboard" Version="0.0.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -565,6 +577,7 @@ Add a `Content` item group so the YAML files are copied to the output directory.
 ```csharp
 using System.Reflection;
 using CommunityToolkit.Aspire.Hosting.Dapr;
+using Diagrid.Aspire.Hosting.Dashboard;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -581,28 +594,25 @@ var cache = builder
 
 var apiService = builder
     .AddProject<Projects.EnterpriseDiagnostics_ApiService>("apiservice")
+    .WithHttpsEndpoint(port: 7337, name: "https")
+    .WithHttpEndpoint(port: 5411, name: "http")
     .WithDaprSidecar(new DaprSidecarOptions
     {
         LogLevel = "debug",
         ResourcesPaths =
         [
-            Path.Join(executingPath, "Resources"),
+            Path.Join(executingPath, "Resources", "dapr"),
         ],
     });
 
 apiService.WaitFor(cache);
-
-builder
-    .AddContainer("diagrid-dashboard", "ghcr.io/diagridio/diagrid-dashboard:latest")
-    .WithContainerName("diagrid-dashboard")
-    .WithBindMount(Path.Join(executingPath, "Resources"), "/app/components")
-    .WithEnvironment("COMPONENT_FILE", "/app/components/statestore-dashboard.yaml")
-    .WithEnvironment("APP_ID", "diagrid-dashboard")
-    .WithHttpEndpoint(targetPort: 8080)
-    .WithReference(cache);
+builder.AddDiagridDashboard();
 
 builder.Build().Run();
+
 ```
+
+> The explicit `WithHttpsEndpoint` / `WithHttpEndpoint` calls pin the apiservice to fixed ports so the URL stays stable across runs (same idea as §1.3 for the Aspire dashboard itself).
 
 ### 3.5 Verify
 
@@ -628,14 +638,14 @@ The Aspire dashboard opens automatically in your browser. Wait until **`apiservi
 
 ### 4.2 Find the ApiService URL
 
-In the Aspire dashboard, click the **`apiservice`** resource and copy its HTTPS endpoint (something like `https://localhost:7XXX`). Use this URL in the curl commands below as `<API_URL>`.
+Because §3.4 pins the apiservice to fixed ports, its HTTPS endpoint is always `https://localhost:7337`. Use this URL in the curl commands below as `<API_URL>` (you can also confirm it in the Aspire dashboard under the **`apiservice`** resource).
 
 ### 4.3 Start a workflow with curl
 
 ```shell
 curl -k -X POST <API_URL>/start ^
   -H "Content-Type: application/json" ^
-  -d "{\"id\":\"mission-001\",\"missionName\":\"Encounter at Farpoint\"}"
+  -d "{\"id\":\"mission-001\",\"starDate\":\"41153.7\"}"
 ```
 
 (PowerShell users: replace `^` line continuations with backticks `` ` ``, or put it all on one line.)
@@ -652,14 +662,14 @@ The response returns the `instanceId`, e.g.:
 curl -k <API_URL>/status/mission-001
 ```
 
-The response contains the workflow `state` and the deserialized `output` with `Priority`, `Summary`, and `BridgeNotified` fields.
+The response contains the workflow `state` and the deserialized `output` with `StarDate`, `Priority`, `Summary`, and `BridgeNotified` fields.
 
 ### 4.5 Open the Diagrid Dev Dashboard
 
 In the Aspire dashboard, find the **`diagrid-dashboard`** resource and click its HTTP endpoint (port 8080). In the dashboard you can:
 
-- Browse all workflow instances backed by the `workflow-store` component.
-- See the timeline of activity executions (the three parallel `AnalyzeSubsystemActivity` calls, then `PrioritizeAnalysesActivity`, and conditionally `NotifyBridgeActivity`).
+- Browse all workflow instances backed by the `workflow-state` component.
+- See the timeline of activity executions (the three parallel `DiagnoseSubsystemActivity` calls, then `PrioritizeDiagnosticsActivity`, and conditionally `NotifyBridgeActivity`).
 - Inspect inputs and outputs for each step.
 
 Run the workflow several times with different `id` values — because the activities use random data, you'll see runs that escalate to **Urgent** (and trigger `NotifyBridgeActivity`) and others that resolve to **Normal** or **Warning**.
